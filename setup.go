@@ -1,6 +1,8 @@
 package zoneregistry
 
 import (
+	"strconv"
+
 	"github.com/coredns/caddy"
 	"github.com/coredns/coredns/core/dnsserver"
 	"github.com/coredns/coredns/plugin"
@@ -36,70 +38,70 @@ func parse(c *caddy.Controller) (*ZoneRegistry, error) {
 	zr := newZoneRegistry()
 
 	for c.Next() {
-		// 	zones := c.RemainingArgs()
-		// 	gw.Zones = zones
-		//
-		// 	if len(gw.Zones) == 0 {
-		// 		gw.Zones = make([]string, len(c.ServerBlockKeys))
-		// 		copy(gw.Zones, c.ServerBlockKeys)
-		// 	}
-		//
-		// 	for i, str := range gw.Zones {
-		// 		if host := plugin.Host(str).NormalizeExact(); len(host) != 0 {
-		// 			gw.Zones[i] = host[0]
-		// 		}
-		// 	}
-		//
-		// 	for c.NextBlock() {
-		// 		switch c.Val() {
-		// 		case "fallthrough":
-		// 			gw.Fall.SetZonesFromArgs(c.RemainingArgs())
-		// 		case "secondary":
-		// 			args := c.RemainingArgs()
-		// 			if len(args) == 0 {
-		// 				return nil, c.ArgErr()
-		// 			}
-		// 			gw.secondNS = args[0]
-		// 		case "resources":
-		// 			args := c.RemainingArgs()
-		//
-		// 			gw.updateResources(args)
-		//
-		// 			if len(args) == 0 {
-		// 				return nil, c.Errf("Incorrectly formated 'resource' parameter")
-		// 			}
-		// 		case "ttl":
-		// 			args := c.RemainingArgs()
-		// 			if len(args) == 0 {
-		// 				return nil, c.ArgErr()
-		// 			}
-		// 			t, err := strconv.Atoi(args[0])
-		// 			if err != nil {
-		// 				return nil, err
-		// 			}
-		// 			if t < 0 || t > 3600 {
-		// 				return nil, c.Errf("ttl must be in range [0, 3600]: %d", t)
-		// 			}
-		// 			gw.ttlLow = uint32(t)
-		// 		case "apex":
-		// 			args := c.RemainingArgs()
-		// 			if len(args) == 0 {
-		// 				return nil, c.ArgErr()
-		// 			}
-		// 			gw.apex = args[0]
-		// 		case "kubeconfig":
-		// 			args := c.RemainingArgs()
-		// 			if len(args) == 0 {
-		// 				return nil, c.ArgErr()
-		// 			}
-		// 			gw.configFile = args[0]
-		// 			if len(args) == 2 {
-		// 				gw.configContext = args[1]
-		// 			}
-		// 		default:
-		// 			return nil, c.Errf("Unknown property '%s'", c.Val())
-		// 		}
-		// 	}
+		zones := c.RemainingArgs()
+		zr.Zones = zones
+
+		if len(zr.Zones) == 0 {
+			zr.Zones = make([]string, len(c.ServerBlockKeys))
+			copy(zr.Zones, c.ServerBlockKeys)
+		}
+
+		for i, str := range zr.Zones {
+			if host := plugin.Host(str).NormalizeExact(); len(host) != 0 {
+				zr.Zones[i] = host[0]
+			}
+		}
+
+		for c.NextBlock() {
+			switch c.Val() {
+
+			case "fallthrough":
+				zr.Fall.SetZonesFromArgs(c.RemainingArgs())
+
+			case "interval":
+				args := c.RemainingArgs()
+				if len(args) == 0 {
+					return nil, c.ArgErr()
+				}
+				t, err := strconv.Atoi(args[0])
+				if err != nil {
+					return nil, err
+				}
+				if t < 0 || t > 300 {
+					return nil, c.Errf("interval must be in range [0, 300]: %d", t)
+				}
+				zr.interval = uint32(t)
+
+			case "ttl":
+				args := c.RemainingArgs()
+				if len(args) == 0 {
+					return nil, c.ArgErr()
+				}
+				t, err := strconv.Atoi(args[0])
+				if err != nil {
+					return nil, err
+				}
+				if t < 0 || t > 3600 {
+					return nil, c.Errf("ttl must be in range [0, 3600]: %d", t)
+				}
+				zr.ttl = uint32(t)
+
+			case "peers":
+				args := c.RemainingArgs()
+				if len(args) == 0 {
+					return nil, c.ArgErr()
+				}
+				zr.Peers = append(zr.Peers, args...)
+
+			default:
+				return nil, c.Errf("Unknown property '%s'", c.Val())
+			}
+		}
 	}
+	// Validate that at least one peer is provided.
+	if len(zr.Peers) == 0 {
+		return nil, c.Errf("no peers defined")
+	}
+
 	return zr, nil
 }
