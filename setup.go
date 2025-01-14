@@ -2,6 +2,7 @@ package zoneregistry
 
 import (
 	"strconv"
+	"time"
 
 	"github.com/coredns/caddy"
 	"github.com/coredns/coredns/core/dnsserver"
@@ -23,6 +24,7 @@ func setup(c *caddy.Controller) error {
 	if err != nil {
 		return plugin.Error(pluginName, err)
 	}
+	go zr.HealthCheck()
 
 	// Add the Plugin to CoreDNS, so Servers can use it in their plugin chain.
 	dnsserver.GetConfig(c).AddPlugin(func(next plugin.Handler) plugin.Handler {
@@ -85,6 +87,19 @@ func parse(c *caddy.Controller) (*ZoneRegistry, error) {
 					return nil, c.Errf("ttl must be in range [0, 3600]: %d", t)
 				}
 				zr.ttl = uint32(t)
+			case "timeout":
+				args := c.RemainingArgs()
+				if len(args) == 0 {
+					return nil, c.ArgErr()
+				}
+				t, err := strconv.Atoi(args[0])
+				if err != nil {
+					return nil, err
+				}
+				if t <= 0 {
+					return nil, c.Errf("ttl must > 0: %d", t)
+				}
+				zr.timeout = time.Duration(t) * time.Millisecond
 
 			case "peers":
 				args := c.RemainingArgs()
@@ -93,7 +108,7 @@ func parse(c *caddy.Controller) (*ZoneRegistry, error) {
 				}
 				for _, peer := range args {
 					if p := plugin.Host(peer).NormalizeExact(); len(p) != 0 {
-						zr.Peers = append(zr.Peers, p[0])
+						zr.Peers[p[0]] = false
 					}
 				}
 

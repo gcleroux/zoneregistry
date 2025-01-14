@@ -15,22 +15,26 @@ import (
 var (
 	intervalDefault = uint32(60)
 	ttlDefault      = uint32(300)
+	timeoutDefault  = 200 * time.Millisecond
 )
 
 type ZoneRegistry struct {
 	Next     plugin.Handler
 	Zones    []string
-	Peers    []string
+	Peers    map[string]bool
 	interval uint32
 	ttl      uint32
+	timeout  time.Duration
 
 	Fall fall.F
 }
 
 func newZoneRegistry() *ZoneRegistry {
 	return &ZoneRegistry{
+		Peers:    map[string]bool{},
 		interval: intervalDefault,
 		ttl:      ttlDefault,
+		timeout:  timeoutDefault,
 	}
 }
 
@@ -56,8 +60,18 @@ func (zr *ZoneRegistry) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *d
 	msg.SetReply(r)
 	msg.Authoritative = true
 
-	for _, peer := range zr.Peers {
-		if !checkHealth(peer) {
+	// Look for healthy peers
+	hasHealthyPeers := false
+	for _, ok := range zr.Peers {
+		if ok {
+			hasHealthyPeers = true
+			break
+		}
+	}
+
+	for peer, ok := range zr.Peers {
+		// Skip unhealthy peers if there are healthy ones
+		if hasHealthyPeers && !ok {
 			continue
 		}
 		cname := &dns.CNAME{
@@ -82,11 +96,29 @@ func (zr *ZoneRegistry) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *d
 
 func (zr *ZoneRegistry) Name() string { return pluginName }
 
-func checkHealth(peer string) bool {
+func (zr *ZoneRegistry) HealthCheck() {
+	ticker := time.NewTicker(time.Duration(zr.interval) * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		log.Debug("Performing healthchecks")
+		for peer := range zr.Peers {
+			zr.Peers[peer] = zr.isHealthy(peer)
+		}
+	}
+}
+
+func (zr *ZoneRegistry) isHealthy(peer string) bool {
 	client := &http.Client{
-		Timeout: 200 * time.Millisecond,
+		Timeout: zr.timeout,
 	}
 	peerURL := fmt.Sprintf("http://%s:8080/health", peer)
 	resp, err := client.Get(peerURL)
-	return err == nil && resp.StatusCode == http.StatusOK
+	if err != nil {
+		log.Debug(err)
+		return false
+	}
+
+	log.Debugf("%s - %d", peer, resp.StatusCode)
+	return resp.StatusCode == http.StatusOK
 }
