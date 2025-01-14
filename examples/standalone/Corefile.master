@@ -3,7 +3,7 @@
     log
     zoneregistry service.pinax.network {
         peers peer1.service.pinax.network peer2.service.pinax.network peer3.service.pinax.network
-        interval 60
+        interval 5
         ttl 300
     }
 }
