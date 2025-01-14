@@ -1,0 +1,8 @@
+. {
+    debug
+    log
+    whoami
+    health {
+        lameduck 5s
+    }
+}

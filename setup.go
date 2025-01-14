@@ -91,7 +91,11 @@ func parse(c *caddy.Controller) (*ZoneRegistry, error) {
 				if len(args) == 0 {
 					return nil, c.ArgErr()
 				}
-				zr.Peers = append(zr.Peers, args...)
+				for _, peer := range args {
+					if p := plugin.Host(peer).NormalizeExact(); len(p) != 0 {
+						zr.Peers = append(zr.Peers, p[0])
+					}
+				}
 
 			default:
 				return nil, c.Errf("Unknown property '%s'", c.Val())

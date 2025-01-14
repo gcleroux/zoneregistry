@@ -3,6 +3,8 @@ package zoneregistry
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"time"
 
 	"github.com/coredns/coredns/plugin"
 	"github.com/coredns/coredns/plugin/pkg/fall"
@@ -55,6 +57,9 @@ func (zr *ZoneRegistry) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *d
 	msg.Authoritative = true
 
 	for _, peer := range zr.Peers {
+		if !checkHealth(peer) {
+			continue
+		}
 		cname := &dns.CNAME{
 			Hdr: dns.RR_Header{
 				Name:   qname,
@@ -74,4 +79,14 @@ func (zr *ZoneRegistry) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *d
 
 	return dns.RcodeSuccess, nil
 }
+
 func (zr *ZoneRegistry) Name() string { return pluginName }
+
+func checkHealth(peer string) bool {
+	client := &http.Client{
+		Timeout: 200 * time.Millisecond,
+	}
+	peerURL := fmt.Sprintf("http://%s:8080/health", peer)
+	resp, err := client.Get(peerURL)
+	return err == nil && resp.StatusCode == http.StatusOK
+}
