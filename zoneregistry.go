@@ -2,9 +2,11 @@ package zoneregistry
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/coredns/coredns/plugin"
 	"github.com/coredns/coredns/plugin/pkg/fall"
+	"github.com/coredns/coredns/request"
 	"github.com/miekg/dns"
 )
 
@@ -32,10 +34,44 @@ func newZoneRegistry() *ZoneRegistry {
 
 // ServeDNS implements the plugin.Handler interface.
 func (zr *ZoneRegistry) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
-	log.Debug("Received response")
-	log.Debug("Testing")
+	state := request.Request{W: w, Req: r}
+	log.Debugf("Incoming query %s", state.QName())
 
-	// Call next plugin (if any).
-	return plugin.NextOrFailure(zr.Name(), zr.Next, ctx, w, r)
+	qname := state.QName()
+	zone := plugin.Zones(zr.Zones).Matches(qname)
+	if zone == "" {
+		log.Debugf("Request %s has not matched any zones %v", qname, zr.Zones)
+		return plugin.NextOrFailure(zr.Name(), zr.Next, ctx, w, r)
+	}
+	zone = qname[len(qname)-len(zone):] // maintain case of original query
+	log.Debugf("Computed zone %s", zone)
+
+	subdomain := qname[:len(qname)-len(zone)-1]
+	log.Debugf("Computed subdomain %s", subdomain)
+
+	// Create the DNS response.
+	msg := new(dns.Msg)
+	msg.SetReply(r)
+	msg.Authoritative = true
+
+	for _, peer := range zr.Peers {
+		cname := &dns.CNAME{
+			Hdr: dns.RR_Header{
+				Name:   qname,
+				Rrtype: dns.TypeCNAME,
+				Class:  dns.ClassINET,
+				Ttl:    zr.ttl,
+			},
+			Target: fmt.Sprintf("%s.%s", subdomain, peer),
+		}
+		msg.Answer = append(msg.Answer, cname)
+	}
+
+	if err := w.WriteMsg(msg); err != nil {
+		log.Errorf("Failed to send a response: %s", err)
+		return dns.RcodeServerFailure, err
+	}
+
+	return dns.RcodeSuccess, nil
 }
 func (zr *ZoneRegistry) Name() string { return pluginName }
