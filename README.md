@@ -2,6 +2,17 @@
 
 A CoreDNS plugin to handle service discovery across distributed kubernetes clusters
 
+## TODOs
+
+- [ ] Return A/AAAA instead of CNAMEs from the registry
+- [ ] Loadbalance the peers records
+- [ ] Add concurrency safety on the peers map
+- [ ] Add CI + automated testing
+- [ ] Add support for multiple zoneregistry masters
+- [ ] Add e2e test for standalone deployment
+- [ ] Add e2e test for k8s deployment
+- [ ] Update README
+
 ## Configure
 
 Configuration options can be used to customize the behaviour of a plugin:
