@@ -4,9 +4,9 @@ A CoreDNS plugin to handle service discovery across distributed kubernetes clust
 
 ## TODOs
 
-- [ ] Return A/AAAA instead of CNAMEs from the registry
+- [x] Return A/AAAA instead of CNAMEs from the registry
 - [ ] Loadbalance the peers records
-- [ ] Add concurrency safety on the peers map
+- [x] Add concurrency safety on the peers map
 - [ ] Add CI + automated testing
 - [ ] Add support for multiple zoneregistry masters
 - [ ] Add e2e test for standalone deployment

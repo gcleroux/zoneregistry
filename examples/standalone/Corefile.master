@@ -7,15 +7,3 @@
         ttl 300
     }
 }
-
-peer1.service.pinax.network. {
-    forward . 172.100.0.101
-}
-
-peer2.service.pinax.network. {
-    forward . 172.100.0.102
-}
-
-peer3.service.pinax.network. {
-    forward . 172.100.0.103
-}

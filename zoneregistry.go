@@ -2,9 +2,7 @@ package zoneregistry
 
 import (
 	"context"
-	"fmt"
-	"net/http"
-	"time"
+	"strings"
 
 	"github.com/coredns/coredns/plugin"
 	"github.com/coredns/coredns/plugin/pkg/fall"
@@ -12,29 +10,21 @@ import (
 	"github.com/miekg/dns"
 )
 
-var (
-	intervalDefault = uint32(60)
-	ttlDefault      = uint32(300)
-	timeoutDefault  = 200 * time.Millisecond
-)
+var ttlDefault = uint32(300)
 
 type ZoneRegistry struct {
-	Next     plugin.Handler
-	Zones    []string
-	Peers    map[string]bool
-	interval uint32
-	ttl      uint32
-	timeout  time.Duration
+	Next  plugin.Handler
+	Zones []string
+	ttl   uint32
+	Fall  fall.F
 
-	Fall fall.F
+	Peers *PeersTracker
 }
 
 func newZoneRegistry() *ZoneRegistry {
 	return &ZoneRegistry{
-		Peers:    map[string]bool{},
-		interval: intervalDefault,
-		ttl:      ttlDefault,
-		timeout:  timeoutDefault,
+		ttl:   ttlDefault,
+		Peers: NewPeersTracker(),
 	}
 }
 
@@ -52,38 +42,23 @@ func (zr *ZoneRegistry) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *d
 	zone = qname[len(qname)-len(zone):] // maintain case of original query
 	log.Debugf("Computed zone %s", zone)
 
-	subdomain := qname[:len(qname)-len(zone)-1]
+	subdomain := strings.SplitN(qname, zone, 2)[0]
 	log.Debugf("Computed subdomain %s", subdomain)
 
 	// Create the DNS response.
 	msg := new(dns.Msg)
-	msg.SetReply(r)
+	msg.SetReply(state.Req)
 	msg.Authoritative = true
 
-	// Look for healthy peers
-	hasHealthyPeers := false
-	for _, ok := range zr.Peers {
-		if ok {
-			hasHealthyPeers = true
-			break
-		}
-	}
+	for _, peer := range zr.Peers.GetHealthyPeers() {
+		msg.Ns = append(msg.Ns, &dns.NS{Hdr: dns.RR_Header{Name: subdomain + peer.Host, Rrtype: dns.TypeNS, Class: dns.ClassINET, Ttl: zr.ttl}, Ns: peer.Host})
 
-	for peer, ok := range zr.Peers {
-		// Skip unhealthy peers if there are healthy ones
-		if hasHealthyPeers && !ok {
-			continue
+		if peer.A != nil {
+			msg.Extra = append(msg.Extra, &dns.A{Hdr: dns.RR_Header{Name: peer.Host, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: zr.ttl}, A: peer.A})
 		}
-		cname := &dns.CNAME{
-			Hdr: dns.RR_Header{
-				Name:   qname,
-				Rrtype: dns.TypeCNAME,
-				Class:  dns.ClassINET,
-				Ttl:    zr.ttl,
-			},
-			Target: fmt.Sprintf("%s.%s", subdomain, peer),
+		if peer.AAAA != nil {
+			msg.Extra = append(msg.Extra, &dns.AAAA{Hdr: dns.RR_Header{Name: peer.Host, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: zr.ttl}, AAAA: peer.AAAA})
 		}
-		msg.Answer = append(msg.Answer, cname)
 	}
 
 	if err := w.WriteMsg(msg); err != nil {
@@ -95,30 +70,3 @@ func (zr *ZoneRegistry) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *d
 }
 
 func (zr *ZoneRegistry) Name() string { return pluginName }
-
-func (zr *ZoneRegistry) HealthCheck() {
-	ticker := time.NewTicker(time.Duration(zr.interval) * time.Second)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		log.Debug("Performing healthchecks")
-		for peer := range zr.Peers {
-			zr.Peers[peer] = zr.isHealthy(peer)
-		}
-	}
-}
-
-func (zr *ZoneRegistry) isHealthy(peer string) bool {
-	client := &http.Client{
-		Timeout: zr.timeout,
-	}
-	peerURL := fmt.Sprintf("http://%s:8080/health", peer)
-	resp, err := client.Get(peerURL)
-	if err != nil {
-		log.Debug(err)
-		return false
-	}
-
-	log.Debugf("%s - %d", peer, resp.StatusCode)
-	return resp.StatusCode == http.StatusOK
-}

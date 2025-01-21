@@ -24,7 +24,7 @@ func setup(c *caddy.Controller) error {
 	if err != nil {
 		return plugin.Error(pluginName, err)
 	}
-	go zr.HealthCheck()
+	go zr.Peers.StartHealthChecks()
 
 	// Add the Plugin to CoreDNS, so Servers can use it in their plugin chain.
 	dnsserver.GetConfig(c).AddPlugin(func(next plugin.Handler) plugin.Handler {
@@ -60,20 +60,6 @@ func parse(c *caddy.Controller) (*ZoneRegistry, error) {
 			case "fallthrough":
 				zr.Fall.SetZonesFromArgs(c.RemainingArgs())
 
-			case "interval":
-				args := c.RemainingArgs()
-				if len(args) == 0 {
-					return nil, c.ArgErr()
-				}
-				t, err := strconv.Atoi(args[0])
-				if err != nil {
-					return nil, err
-				}
-				if t < 0 || t > 300 {
-					return nil, c.Errf("interval must be in range [0, 300]: %d", t)
-				}
-				zr.interval = uint32(t)
-
 			case "ttl":
 				args := c.RemainingArgs()
 				if len(args) == 0 {
@@ -87,6 +73,21 @@ func parse(c *caddy.Controller) (*ZoneRegistry, error) {
 					return nil, c.Errf("ttl must be in range [0, 3600]: %d", t)
 				}
 				zr.ttl = uint32(t)
+
+			case "interval":
+				args := c.RemainingArgs()
+				if len(args) == 0 {
+					return nil, c.ArgErr()
+				}
+				t, err := strconv.Atoi(args[0])
+				if err != nil {
+					return nil, err
+				}
+				if t < 0 || t > 300 {
+					return nil, c.Errf("interval must be in range [0, 300]: %d", t)
+				}
+				zr.Peers.Interval = uint32(t)
+
 			case "timeout":
 				args := c.RemainingArgs()
 				if len(args) == 0 {
@@ -99,16 +100,20 @@ func parse(c *caddy.Controller) (*ZoneRegistry, error) {
 				if t <= 0 {
 					return nil, c.Errf("ttl must > 0: %d", t)
 				}
-				zr.timeout = time.Duration(t) * time.Millisecond
+				zr.Peers.Timeout = time.Duration(t) * time.Millisecond
 
 			case "peers":
 				args := c.RemainingArgs()
 				if len(args) == 0 {
 					return nil, c.ArgErr()
 				}
-				for _, peer := range args {
-					if p := plugin.Host(peer).NormalizeExact(); len(p) != 0 {
-						zr.Peers[p[0]] = false
+				for _, host := range args {
+					if h := plugin.Host(host).NormalizeExact(); len(h) != 0 {
+						p, err := NewPeer(h[0])
+						if err != nil {
+							return nil, c.Errf("Registering peer %s failed - %v", h[0], err)
+						}
+						zr.Peers.AddPeer(p)
 					}
 				}
 
@@ -117,10 +122,5 @@ func parse(c *caddy.Controller) (*ZoneRegistry, error) {
 			}
 		}
 	}
-	// Validate that at least one peer is provided.
-	if len(zr.Peers) == 0 {
-		return nil, c.Errf("no peers defined")
-	}
-
 	return zr, nil
 }

@@ -1,9 +1,11 @@
 networks:
   coredns:
+    enable_ipv6: true
     driver: bridge
     ipam:
       config:
         - subnet: 172.100.0.0/16
+        - subnet: 2001:db8::/32
 
 services:
   coredns-master:
@@ -14,8 +16,7 @@ services:
     networks:
       coredns:
         ipv4_address: 172.100.0.100
-    ports:
-      - "5300:53/udp"
+        ipv6_address: 2001:db8:172:100::100
     volumes:
       - ./Corefile.master:/Corefile:ro
       - ./hosts:/etc/hosts:ro
@@ -26,6 +27,7 @@ services:
     networks:
       coredns:
         ipv4_address: 172.100.0.101
+        ipv6_address: 2001:db8:172:100::101
     volumes:
       - ./Corefile.peers:/Corefile:ro # Mount Corefile for configuration
 
@@ -35,6 +37,7 @@ services:
     networks:
       coredns:
         ipv4_address: 172.100.0.102
+        ipv6_address: 2001:db8:172:100::102
     volumes:
       - ./Corefile.peers:/Corefile:ro # Mount Corefile for configuration
 
@@ -44,5 +47,6 @@ services:
     networks:
       coredns:
         ipv4_address: 172.100.0.103
+        ipv6_address: 2001:db8:172:100::103
     volumes:
       - ./Corefile.peers:/Corefile:ro # Mount Corefile for configuration
