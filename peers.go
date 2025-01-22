@@ -56,6 +56,7 @@ func (p *peer) resolveHost() error {
 type PeersTracker struct {
 	peers []*peer
 	mu    sync.RWMutex
+	index int
 
 	Interval uint32
 	Timeout  time.Duration
@@ -65,6 +66,7 @@ func NewPeersTracker() *PeersTracker {
 	pt := &PeersTracker{
 		Interval: intervalDefault,
 		Timeout:  timeoutDefault,
+		index:    0,
 	}
 	return pt
 }
@@ -85,9 +87,20 @@ func (pt *PeersTracker) GetHealthyPeers() []*peer {
 		healthyPeers = append(healthyPeers, pt.peers...)
 	}
 
+	// Rotate the list based on the round-robin index
+	n := len(healthyPeers)
+	rotated := make([]*peer, n)
+	if pt.index >= n {
+		pt.index = 0 // Reset index to prevent OOB errors
 	}
 
-	return healthyPeers
+	// Rotate the list based on the round-robin index
+	copy(rotated, healthyPeers[pt.index:])
+	copy(rotated[n-pt.index:], healthyPeers[:pt.index])
+
+	pt.index = (pt.index + 1) % n
+
+	return rotated
 }
 
 // AddPeer safely adds or updates a peer
