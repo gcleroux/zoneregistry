@@ -2,7 +2,6 @@ package zoneregistry
 
 import (
 	"strconv"
-	"time"
 
 	"github.com/coredns/caddy"
 	"github.com/coredns/coredns/core/dnsserver"
@@ -100,7 +99,7 @@ func parse(c *caddy.Controller) (*ZoneRegistry, error) {
 				if t < 0 || t > 30 {
 					return nil, c.Errf("timeout must be in range [0, 30]: %d", t)
 				}
-				zr.Peers.Timeout = time.Duration(t) * time.Second
+				zr.Peers.Timeout = uint32(t)
 
 			case "peers":
 				args := c.RemainingArgs()
@@ -108,13 +107,14 @@ func parse(c *caddy.Controller) (*ZoneRegistry, error) {
 					return nil, c.ArgErr()
 				}
 				for _, host := range args {
-					if h := plugin.Host(host).NormalizeExact(); len(h) != 0 {
-						p, err := NewPeer(h[0])
-						if err != nil {
-							return nil, c.Errf("Registering peer %s failed - %v", h[0], err)
-						}
-						zr.Peers.AddPeer(p)
+					p := NewPeer(host)
+					if p == nil {
+						return nil, c.Errf("Registering peer %s failed", host)
 					}
+					if err := p.resolveHost(); err != nil {
+						return nil, c.Errf("Resolving peer %s failed - %v", host, err)
+					}
+					zr.Peers.AddPeer(p)
 				}
 
 			default:

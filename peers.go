@@ -7,15 +7,17 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/coredns/coredns/plugin"
 )
 
 var (
 	healthPortDefault = uint32(8080)
 	intervalDefault   = uint32(60)
-	timeoutDefault    = 5 * time.Second
+	timeoutDefault    = uint32(5)
 )
 
-type peer struct {
+type Peer struct {
 	Host       string
 	Healthy    bool
 	HealthPort uint32
@@ -24,20 +26,19 @@ type peer struct {
 	AAAA net.IP
 }
 
-func NewPeer(host string) (*peer, error) {
-	p := &peer{
-		Host:       host,
-		Healthy:    false,
-		HealthPort: healthPortDefault,
+func NewPeer(host string) *Peer {
+	if h := plugin.Host(host).NormalizeExact(); len(h) != 0 {
+		return &Peer{
+			Host:       h[0],
+			Healthy:    false,
+			HealthPort: healthPortDefault,
+		}
 	}
-	if err := p.resolveHost(); err != nil {
-		return nil, err
-	}
-	return p, nil
+	return nil
 }
 
 // ResolveHost resolves a host to its IPv4 (A) and IPv6 (AAAA) addresses.
-func (p *peer) resolveHost() error {
+func (p *Peer) resolveHost() error {
 	ips, err := net.LookupIP(p.Host)
 	if err != nil {
 		return err
@@ -55,12 +56,12 @@ func (p *peer) resolveHost() error {
 }
 
 type PeersTracker struct {
-	peers []*peer
+	peers []*Peer
 	mu    sync.RWMutex
 	index int
 
 	Interval uint32
-	Timeout  time.Duration
+	Timeout  uint32
 }
 
 func NewPeersTracker() *PeersTracker {
@@ -72,11 +73,11 @@ func NewPeersTracker() *PeersTracker {
 	return pt
 }
 
-func (pt *PeersTracker) GetHealthyPeers() []*peer {
+func (pt *PeersTracker) GetHealthyPeers() []*Peer {
 	pt.mu.RLock()
 	defer pt.mu.RUnlock()
 
-	healthyPeers := make([]*peer, 0, len(pt.peers))
+	healthyPeers := make([]*Peer, 0, len(pt.peers))
 	for _, peer := range pt.peers {
 		if peer.Healthy {
 			healthyPeers = append(healthyPeers, peer)
@@ -90,7 +91,7 @@ func (pt *PeersTracker) GetHealthyPeers() []*peer {
 
 	// Rotate the list based on the round-robin index
 	n := len(healthyPeers)
-	rotated := make([]*peer, n)
+	rotated := make([]*Peer, n)
 	if pt.index >= n {
 		pt.index = 0 // Reset index to prevent OOB errors
 	}
@@ -105,7 +106,7 @@ func (pt *PeersTracker) GetHealthyPeers() []*peer {
 }
 
 // AddPeer safely adds or updates a peer
-func (pt *PeersTracker) AddPeer(peer *peer) {
+func (pt *PeersTracker) AddPeer(peer *Peer) {
 	pt.mu.Lock()
 	defer pt.mu.Unlock()
 
@@ -113,7 +114,7 @@ func (pt *PeersTracker) AddPeer(peer *peer) {
 }
 
 // RemovePeer safely removes a peer using in-place deletion
-func (pt *PeersTracker) RemovePeer(peer *peer) {
+func (pt *PeersTracker) RemovePeer(peer *Peer) {
 	pt.mu.Lock()
 	defer pt.mu.Unlock()
 
@@ -137,7 +138,7 @@ func (pt *PeersTracker) StartHealthChecks() {
 		pt.mu.Lock()
 		for _, p := range pt.peers {
 			wg.Add(1)
-			go func(p *peer) {
+			go func(p *Peer) {
 				defer wg.Done()
 				healthy := isHealthy(*p, pt.Timeout)
 				if p.Healthy != healthy {
@@ -151,9 +152,9 @@ func (pt *PeersTracker) StartHealthChecks() {
 	}
 }
 
-func isHealthy(p peer, timeout time.Duration) bool {
+func isHealthy(p Peer, timeout uint32) bool {
 	client := &http.Client{
-		Timeout: timeout,
+		Timeout: time.Duration(timeout) * time.Second,
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
