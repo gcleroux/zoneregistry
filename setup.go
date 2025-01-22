@@ -97,10 +97,10 @@ func parse(c *caddy.Controller) (*ZoneRegistry, error) {
 				if err != nil {
 					return nil, err
 				}
-				if t <= 0 {
-					return nil, c.Errf("ttl must > 0: %d", t)
+				if t < 0 || t > 30 {
+					return nil, c.Errf("timeout must be in range [0, 30]: %d", t)
 				}
-				zr.Peers.Timeout = time.Duration(t) * time.Millisecond
+				zr.Peers.Timeout = time.Duration(t) * time.Second
 
 			case "peers":
 				args := c.RemainingArgs()

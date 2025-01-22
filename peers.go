@@ -1,6 +1,7 @@
 package zoneregistry
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -11,7 +12,7 @@ import (
 var (
 	healthPortDefault = uint32(8080)
 	intervalDefault   = uint32(60)
-	timeoutDefault    = 2000 * time.Millisecond
+	timeoutDefault    = 5 * time.Second
 )
 
 type peer struct {
@@ -128,18 +129,24 @@ func (pt *PeersTracker) RemovePeer(peer *peer) {
 }
 
 func (pt *PeersTracker) StartHealthChecks() {
+	var wg sync.WaitGroup
 	ticker := time.NewTicker(time.Duration(pt.Interval) * time.Second)
 	defer ticker.Stop()
 
 	for range ticker.C {
 		pt.mu.Lock()
 		for _, p := range pt.peers {
-			healthy := isHealthy(*p, pt.Timeout)
-			if p.Healthy != healthy {
-				log.Debugf("Peer %s changed state: Ready=%v\n", p.Host, healthy)
-			}
-			p.Healthy = healthy
+			wg.Add(1)
+			go func(p *peer) {
+				defer wg.Done()
+				healthy := isHealthy(*p, pt.Timeout)
+				if p.Healthy != healthy {
+					log.Debugf("Peer %s changed state: Ready=%v\n", p.Host, healthy)
+				}
+				p.Healthy = healthy
+			}(p)
 		}
+		wg.Wait()
 		pt.mu.Unlock()
 	}
 }
@@ -148,12 +155,21 @@ func isHealthy(p peer, timeout time.Duration) bool {
 	client := &http.Client{
 		Timeout: timeout,
 	}
-	peerURL := fmt.Sprintf("http://%s:%d/health", p.Host, p.HealthPort)
-	resp, err := client.Get(peerURL)
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("http://%s:%d/health", p.Host, p.HealthPort), nil)
 	if err != nil {
-		log.Debug(err)
+		log.Debugf("Health check request creation failed for %s: %v", p.Host, err)
 		return false
 	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Debugf("Health check failed for %s: %v", p.Host, err)
+		return false
+	}
+	defer resp.Body.Close()
 
 	log.Debugf("%s - %d", p.Host, resp.StatusCode)
 	return resp.StatusCode == http.StatusOK
