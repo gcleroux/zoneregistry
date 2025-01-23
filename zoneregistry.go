@@ -2,7 +2,10 @@ package zoneregistry
 
 import (
 	"context"
+	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/coredns/coredns/plugin"
 	"github.com/coredns/coredns/plugin/pkg/fall"
@@ -10,21 +13,30 @@ import (
 	"github.com/miekg/dns"
 )
 
-var ttlDefault = uint32(300)
+var (
+	ttlDefault      = uint32(300)
+	intervalDefault = uint32(60)
+	timeoutDefault  = uint32(5)
+)
 
 type ZoneRegistry struct {
-	Next  plugin.Handler
-	Zones []string
-	ttl   uint32
-	Fall  fall.F
+	Next     plugin.Handler
+	Zones    []string
+	TTL      uint32
+	Interval uint32
+	Timeout  uint32
+	Fall     fall.F
 
-	Peers *PeersTracker
+	Peers []*Peer
+	mu    sync.RWMutex
+	index int
 }
 
 func newZoneRegistry() *ZoneRegistry {
 	return &ZoneRegistry{
-		ttl:   ttlDefault,
-		Peers: NewPeersTracker(),
+		TTL:      ttlDefault,
+		Interval: intervalDefault,
+		Timeout:  timeoutDefault,
 	}
 }
 
@@ -50,14 +62,26 @@ func (zr *ZoneRegistry) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *d
 	msg.SetReply(state.Req)
 	msg.Authoritative = true
 
-	for _, peer := range zr.Peers.GetHealthyPeers() {
-		msg.Ns = append(msg.Ns, &dns.NS{Hdr: dns.RR_Header{Name: subdomain + peer.Host, Rrtype: dns.TypeNS, Class: dns.ClassINET, Ttl: zr.ttl}, Ns: peer.Host})
+	healthyPeers := zr.GetHealthyPeers()
 
-		if peer.A != nil {
-			msg.Extra = append(msg.Extra, &dns.A{Hdr: dns.RR_Header{Name: peer.Host, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: zr.ttl}, A: peer.A})
+	// Rotate the list based on the round-robin index
+	n := len(healthyPeers)
+	lbPeers := make([]*Peer, n)
+	if zr.index >= n {
+		zr.index = 0 // Reset index to prevent OOB errors
+	}
+	copy(lbPeers, healthyPeers[zr.index:])
+	copy(lbPeers[n-zr.index:], healthyPeers[:zr.index])
+	zr.index = (zr.index + 1) % n
+
+	for _, peer := range lbPeers {
+		msg.Ns = append(msg.Ns, &dns.NS{Hdr: dns.RR_Header{Name: subdomain + peer.Host, Rrtype: dns.TypeNS, Class: dns.ClassINET, Ttl: zr.TTL}, Ns: peer.Host})
+
+		if peer.IPv4 != nil {
+			msg.Extra = append(msg.Extra, &dns.A{Hdr: dns.RR_Header{Name: peer.Host, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: zr.TTL}, A: peer.IPv4})
 		}
-		if peer.AAAA != nil {
-			msg.Extra = append(msg.Extra, &dns.AAAA{Hdr: dns.RR_Header{Name: peer.Host, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: zr.ttl}, AAAA: peer.AAAA})
+		if peer.IPv6 != nil {
+			msg.Extra = append(msg.Extra, &dns.AAAA{Hdr: dns.RR_Header{Name: peer.Host, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: zr.TTL}, AAAA: peer.IPv6})
 		}
 	}
 
@@ -70,3 +94,58 @@ func (zr *ZoneRegistry) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *d
 }
 
 func (zr *ZoneRegistry) Name() string { return pluginName }
+
+func (zr *ZoneRegistry) GetHealthyPeers() []*Peer {
+	zr.mu.RLock()
+	defer zr.mu.RUnlock()
+
+	healthyPrimaryPeers := make([]*Peer, 0, len(zr.Peers))
+	healthySecondaryPeers := make([]*Peer, 0, len(zr.Peers))
+	for _, peer := range zr.Peers {
+		if peer.Healthy && peer.Role == "primary" {
+			healthyPrimaryPeers = append(healthyPrimaryPeers, peer)
+		}
+		if peer.Healthy && peer.Role == "secondary" {
+			healthySecondaryPeers = append(healthySecondaryPeers, peer)
+		}
+	}
+
+	if len(healthyPrimaryPeers) > 0 {
+		return healthyPrimaryPeers
+	}
+	if len(healthySecondaryPeers) > 0 {
+		return healthySecondaryPeers
+	}
+
+	// Return all peers if none are healthy
+	log.Debugf("No healthy peers found, returning all peers")
+	healthyPrimaryPeers = append(healthyPrimaryPeers, zr.Peers...)
+	return healthyPrimaryPeers
+}
+
+func (zr *ZoneRegistry) StartHealthChecks() {
+	var wg sync.WaitGroup
+	ticker := time.NewTicker(time.Duration(zr.Interval) * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		zr.mu.Lock()
+		for _, p := range zr.Peers {
+			wg.Add(1)
+			go func(p *Peer) {
+				defer wg.Done()
+				client := &http.Client{
+					Timeout: time.Duration(zr.Timeout) * time.Second,
+				}
+
+				status := p.isHealthy(client)
+				if p.Healthy != status {
+					log.Debugf("Peer %s changed state: Ready=%v\n", p.Host, status)
+				}
+				p.Healthy = status
+			}(p)
+		}
+		wg.Wait()
+		zr.mu.Unlock()
+	}
+}

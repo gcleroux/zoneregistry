@@ -1,9 +1,38 @@
 . {
     debug
     log
+
     zoneregistry service.pinax.network {
-        peers peer1.service.pinax.network peer2.service.pinax.network peer3.service.pinax.network
         interval 5
+        timeout 10
         ttl 300
+
+        peer peer1.service.pinax.network {
+            role primary
+            labels cluster-env=prod
+            ipv4 172.100.0.101
+            ipv6 2001:db8::101
+            protocol http
+            path /health
+            port 8080
+        }
+        peer peer2.service.pinax.network {
+            role primary
+            labels cluster-env=prod
+            ipv4 172.100.0.102
+            ipv6 2001:db8::102
+            protocol http
+            path /health
+            port 8080
+        }
+        peer peer3.service.pinax.network {
+            role secondary
+            labels cluster-env=dev
+            ipv4 172.100.0.103
+            ipv6 2001:db8::103
+            protocol http
+            path /health
+            port 8080
+        }
     }
 }

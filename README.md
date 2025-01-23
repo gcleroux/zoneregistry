@@ -7,9 +7,11 @@ A CoreDNS plugin to handle service discovery across distributed kubernetes clust
 - [x] Return A/AAAA instead of CNAMEs from the registry
 - [x] Loadbalance the peers records
 - [x] Add concurrency safety on the peers map
+- [x] Add e2e test for standalone deployment
+- [x] Add primary/secondary role for peers
+- [ ] Add prometheus metrics integration
 - [ ] Add CI + automated testing
 - [ ] Add support for multiple zoneregistry masters
-- [ ] Add e2e test for standalone deployment
 - [ ] Add e2e test for k8s deployment
 - [ ] Update README
 
@@ -39,21 +41,39 @@ Configuring the zone registry to perform healthchecks on 3 k8s clusters
 ```
 . {
   zoneregistry service.pinax.network {
-    peers riv-prod1. riv-prod2. mar-prod3.
+    debug
+    metrics
     interval 60
+    timeout 10
     ttl 300
+
+    peer riv-prod1.service.pinax.network {
+        role primary
+        labels cluster-env=prod
+        IPv4 172.100.0.101
+        IPv6 2001:db8:172:100::101
+        protocol http
+        path /health
+        port 8080
+    }
+    peer riv-prod2.service.pinax.network {
+        role primary
+        labels cluster-env=prod
+        IPv4 172.100.0.102
+        IPv6 2001:db8:172:100::102
+        protocol http
+        path /health
+        port 8080
+    }
+    peer mar-dev1.service.pinax.network {
+        role secondary
+        labels cluster-env=dev
+        IPv4 172.100.0.1043
+        IPv6 2001:db8:172:100::103
+        protocol http
+        path /health
+        port 8080
+    }
   }
-}
-
-riv-prod1. {
-  forward . 172.21.0.1:53
-}
-
-riv-prod2. {
-  forward . 172.21.0.2:53
-}
-
-mar-prod3. {
-  forward . 172.19.0.1:53
 }
 ```

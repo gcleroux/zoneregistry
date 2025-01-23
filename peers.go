@@ -5,173 +5,90 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"sync"
 	"time"
-
-	"github.com/coredns/coredns/plugin"
 )
 
 var (
-	healthPortDefault = uint32(8080)
-	intervalDefault   = uint32(60)
-	timeoutDefault    = uint32(5)
+	roleDefault     = "primary"
+	protocolDefault = "http"
+	pathDefault     = "/health"
+	portDefault     = uint32(8080)
 )
 
 type Peer struct {
-	Host       string
-	Healthy    bool
-	HealthPort uint32
+	Host    string
+	Role    string
+	Healthy bool
+	Labels  []string
 
-	A    net.IP
-	AAAA net.IP
+	Protocol string
+	Path     string
+	Port     uint32
+
+	IPv4 net.IP
+	IPv6 net.IP
 }
 
-func NewPeer(host string) *Peer {
-	if h := plugin.Host(host).NormalizeExact(); len(h) != 0 {
-		return &Peer{
-			Host:       h[0],
-			Healthy:    false,
-			HealthPort: healthPortDefault,
-		}
-	}
-	return nil
-}
-
-// ResolveHost resolves a host to its IPv4 (A) and IPv6 (AAAA) addresses.
-func (p *Peer) resolveHost() error {
-	ips, err := net.LookupIP(p.Host)
-	if err != nil {
-		return err
-	}
-
-	for _, ip := range ips {
-		log.Debugf("Resolved host %s to %s", p.Host, ip.String())
-		if ipv4 := ip.To4(); ipv4 != nil {
-			p.A = ipv4
-		} else {
-			p.AAAA = ip
-		}
-	}
-	return nil
-}
-
-type PeersTracker struct {
-	peers []*Peer
-	mu    sync.RWMutex
-	index int
-
-	Interval uint32
-	Timeout  uint32
-}
-
-func NewPeersTracker() *PeersTracker {
-	pt := &PeersTracker{
-		Interval: intervalDefault,
-		Timeout:  timeoutDefault,
-		index:    0,
-	}
-	return pt
-}
-
-func (pt *PeersTracker) GetHealthyPeers() []*Peer {
-	pt.mu.RLock()
-	defer pt.mu.RUnlock()
-
-	healthyPeers := make([]*Peer, 0, len(pt.peers))
-	for _, peer := range pt.peers {
-		if peer.Healthy {
-			healthyPeers = append(healthyPeers, peer)
-		}
-	}
-	// Return all peers if none are healthy
-	if len(healthyPeers) == 0 {
-		log.Debugf("No healthy peers found, returning all peers")
-		healthyPeers = append(healthyPeers, pt.peers...)
-	}
-
-	// Rotate the list based on the round-robin index
-	n := len(healthyPeers)
-	rotated := make([]*Peer, n)
-	if pt.index >= n {
-		pt.index = 0 // Reset index to prevent OOB errors
-	}
-
-	// Rotate the list based on the round-robin index
-	copy(rotated, healthyPeers[pt.index:])
-	copy(rotated[n-pt.index:], healthyPeers[:pt.index])
-
-	pt.index = (pt.index + 1) % n
-
-	return rotated
-}
-
-// AddPeer safely adds or updates a peer
-func (pt *PeersTracker) AddPeer(peer *Peer) {
-	pt.mu.Lock()
-	defer pt.mu.Unlock()
-
-	pt.peers = append(pt.peers, peer)
-}
-
-// RemovePeer safely removes a peer using in-place deletion
-func (pt *PeersTracker) RemovePeer(peer *Peer) {
-	pt.mu.Lock()
-	defer pt.mu.Unlock()
-
-	// Two-pointer technique for in-place removal
-	i := 0
-	for _, p := range pt.peers {
-		if p.Host != peer.Host {
-			pt.peers[i] = p
-			i++
-		}
-	}
-	pt.peers = pt.peers[:i]
-}
-
-func (pt *PeersTracker) StartHealthChecks() {
-	var wg sync.WaitGroup
-	ticker := time.NewTicker(time.Duration(pt.Interval) * time.Second)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		pt.mu.Lock()
-		for _, p := range pt.peers {
-			wg.Add(1)
-			go func(p *Peer) {
-				defer wg.Done()
-				healthy := isHealthy(*p, pt.Timeout)
-				if p.Healthy != healthy {
-					log.Debugf("Peer %s changed state: Ready=%v\n", p.Host, healthy)
-				}
-				p.Healthy = healthy
-			}(p)
-		}
-		wg.Wait()
-		pt.mu.Unlock()
+func NewPeer() *Peer {
+	return &Peer{
+		Role:     roleDefault,
+		Protocol: protocolDefault,
+		Path:     pathDefault,
+		Port:     portDefault,
 	}
 }
 
-func isHealthy(p Peer, timeout uint32) bool {
-	client := &http.Client{
-		Timeout: time.Duration(timeout) * time.Second,
-	}
+func (p Peer) isHealthy(c *http.Client) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("http://%s:%d/health", p.Host, p.HealthPort), nil)
-	if err != nil {
-		log.Debugf("Health check request creation failed for %s: %v", p.Host, err)
-		return false
+	urls := []string{}
+	// Prioritize IPv6
+	if p.IPv6 != nil {
+		url := fmt.Sprintf("%s://[%s]:%d%s", p.Protocol, p.IPv6.String(), p.Port, p.Path)
+		urls = append(urls, url)
+	}
+	if p.IPv4 != nil {
+		url := fmt.Sprintf("%s://%s:%d%s", p.Protocol, p.IPv4.String(), p.Port, p.Path)
+		urls = append(urls, url)
+	}
+	results := make(chan bool, len(urls))
+
+	for _, url := range urls {
+		go func(u string) {
+			req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+			if err != nil {
+				log.Debugf("health check request creation failed for %s: %v", u, err)
+				results <- false
+				return
+			}
+
+			resp, err := c.Do(req)
+			if err != nil {
+				log.Debugf("Health check failed for %s: %v", u, err)
+				results <- false
+				return
+			}
+			defer resp.Body.Close()
+
+			log.Debugf("%s - %d", u, resp.StatusCode)
+			if resp.StatusCode == http.StatusOK {
+				results <- true
+				return
+			}
+			results <- false
+		}(url)
 	}
 
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Debugf("Health check failed for %s: %v", p.Host, err)
-		return false
+	for range urls {
+		select {
+		case success := <-results:
+			if success {
+				return true
+			}
+		case <-ctx.Done():
+			return false
+		}
 	}
-	defer resp.Body.Close()
-
-	log.Debugf("%s - %d", p.Host, resp.StatusCode)
-	return resp.StatusCode == http.StatusOK
+	return false
 }

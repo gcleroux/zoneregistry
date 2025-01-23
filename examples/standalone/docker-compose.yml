@@ -16,10 +16,9 @@ services:
     networks:
       coredns:
         ipv4_address: 172.100.0.100
-        ipv6_address: 2001:db8:172:100::100
+        ipv6_address: 2001:db8::100
     volumes:
       - ./Corefile.master:/Corefile:ro
-      - ./hosts:/etc/hosts:ro
 
   peer1:
     image: coredns/coredns:latest
@@ -27,7 +26,7 @@ services:
     networks:
       coredns:
         ipv4_address: 172.100.0.101
-        ipv6_address: 2001:db8:172:100::101
+        ipv6_address: 2001:db8::101
     volumes:
       - ./Corefile.peers:/Corefile:ro # Mount Corefile for configuration
 
@@ -37,7 +36,7 @@ services:
     networks:
       coredns:
         ipv4_address: 172.100.0.102
-        ipv6_address: 2001:db8:172:100::102
+        ipv6_address: 2001:db8::102
     volumes:
       - ./Corefile.peers:/Corefile:ro # Mount Corefile for configuration
 
@@ -47,6 +46,6 @@ services:
     networks:
       coredns:
         ipv4_address: 172.100.0.103
-        ipv6_address: 2001:db8:172:100::103
+        ipv6_address: 2001:db8::103
     volumes:
       - ./Corefile.peers:/Corefile:ro # Mount Corefile for configuration
