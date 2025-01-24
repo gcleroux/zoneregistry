@@ -1,6 +1,7 @@
 . {
     debug
     log
+    prometheus 0.0.0.0:9153
 
     zoneregistry service.pinax.network {
         interval 5

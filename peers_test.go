@@ -11,12 +11,13 @@ func TestPeers(t *testing.T) {
 	}{
 		{
 			input:            `example.org`,
-			expectedPeerHost: "example.org.",
+			expectedPeerHost: "example.org",
 		},
 	}
 
 	for i, test := range tests {
-		peer := NewPeer(test.input)
+		peer := NewPeer()
+		peer.Host = test.input
 
 		// Validate Peer Host
 		if test.expectedPeerHost != peer.Host {

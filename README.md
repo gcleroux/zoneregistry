@@ -9,7 +9,7 @@ A CoreDNS plugin to handle service discovery across distributed kubernetes clust
 - [x] Add concurrency safety on the peers map
 - [x] Add e2e test for standalone deployment
 - [x] Add primary/secondary role for peers
-- [ ] Add prometheus metrics integration
+- [x] Add prometheus metrics integration
 - [ ] Add CI + automated testing
 - [ ] Add support for multiple zoneregistry masters
 - [ ] Add e2e test for k8s deployment

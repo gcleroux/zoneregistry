@@ -5,9 +5,11 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coredns/coredns/plugin"
+	"github.com/coredns/coredns/plugin/metrics"
 	"github.com/coredns/coredns/plugin/pkg/fall"
 	"github.com/coredns/coredns/request"
 	"github.com/miekg/dns"
@@ -42,6 +44,7 @@ func newZoneRegistry() *ZoneRegistry {
 
 // ServeDNS implements the plugin.Handler interface.
 func (zr *ZoneRegistry) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
+	start := time.Now()
 	state := request.Request{W: w, Req: r}
 	log.Debugf("Incoming query %s", state.QName())
 
@@ -89,6 +92,8 @@ func (zr *ZoneRegistry) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *d
 		log.Errorf("Failed to send a response: %s", err)
 		return dns.RcodeServerFailure, err
 	}
+	queryCount.WithLabelValues(metrics.WithServer(ctx), zone).Inc()
+	responseDuration.WithLabelValues(metrics.WithServer(ctx), zone).Observe(float64(time.Since(start).Seconds()))
 
 	return dns.RcodeSuccess, nil
 }
@@ -130,6 +135,8 @@ func (zr *ZoneRegistry) StartHealthChecks() {
 
 	for range ticker.C {
 		zr.mu.Lock()
+		hp_count := atomic.Uint32{}
+		hs_count := atomic.Uint32{}
 		for _, p := range zr.Peers {
 			wg.Add(1)
 			go func(p *Peer) {
@@ -143,9 +150,23 @@ func (zr *ZoneRegistry) StartHealthChecks() {
 					log.Debugf("Peer %s changed state: Ready=%v\n", p.Host, status)
 				}
 				p.Healthy = status
+
+				// Track peer count for metrics
+				if status == true {
+					if p.Role == "primary" {
+						hp_count.Add(1)
+					} else {
+						hs_count.Add(1)
+					}
+				}
 			}(p)
 		}
 		wg.Wait()
 		zr.mu.Unlock()
+
+		healthyPeers.WithLabelValues("primary").Set(float64(hp_count.Load()))
+		healthyPeers.WithLabelValues("secondary").Set(float64(hs_count.Load()))
+		unhealthyPeers.WithLabelValues("primary").Set(float64(len(zr.Peers) - int(hp_count.Load())))
+		unhealthyPeers.WithLabelValues("secondary").Set(float64(len(zr.Peers) - int(hs_count.Load())))
 	}
 }
